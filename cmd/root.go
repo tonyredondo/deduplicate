@@ -111,8 +111,8 @@ func populateHash(folders []string) {
 				strHash := fmt.Sprintf("%x", hash)
 
 				if current, ok := hashes[strHash]; ok {
-					fmt.Printf("File '%s' duplicate with: '%s'. Ignoring it. \n", fPath, current)
 					collisions++
+					fmt.Printf("(%d). File '%s' duplicate with: '%s'. Ignoring it. \n", collisions, fPath, current)
 				} else {
 					hashes[strHash] = fPath
 				}
