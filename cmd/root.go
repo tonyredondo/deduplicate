@@ -20,11 +20,14 @@ import (
 
 var (
 	extensions = map[string]interface{}{
-		".jpg": nil,
-		".gif": nil,
-		".png": nil,
-		".mp4": nil,
-		".mov": nil,
+		".jpg":  nil,
+		".gif":  nil,
+		".png":  nil,
+		".jpeg": nil,
+		".heic": nil,
+		".mp4":  nil,
+		".mov":  nil,
+		".m4v":  nil,
 	}
 	hashes map[string]string
 
