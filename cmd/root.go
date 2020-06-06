@@ -51,8 +51,11 @@ var (
 		".m2v":  nil,
 		".mp2":  nil,
 	}
-	hashesMutex = sync.Mutex{}
-	hashes      map[string]string
+	hashesMutex  = sync.Mutex{}
+	hashes       map[string]string
+	collisions   int64
+	copyErrors   int64
+	removeErrors int64
 
 	sources     []string
 	destination string
@@ -113,6 +116,9 @@ func run(cmd *cobra.Command, args []string) {
 	for i := 0; i < concurrency; i++ {
 		go worker(i + 1)
 	}
+	atomic.StoreInt64(&collisions, 0)
+	atomic.StoreInt64(&copyErrors, 0)
+	atomic.StoreInt64(&removeErrors, 0)
 
 	fmt.Println("Source Folders:", folders)
 	fmt.Println("Destination:", dest)
@@ -130,12 +136,18 @@ func run(cmd *cobra.Command, args []string) {
 	close(workerJobs)
 
 	fmt.Println()
-	fmt.Printf("Done in %v.", time.Since(start))
+	fmt.Println()
+	fmt.Println("Total number of images:", len(hashes))
+	fmt.Println("Total number of duplicates:", atomic.LoadInt64(&collisions))
+	fmt.Println("Total number of copy errors:", atomic.LoadInt64(&copyErrors))
+	if move {
+		fmt.Println("Total number of remove errors:", atomic.LoadInt64(&removeErrors))
+	}
+	fmt.Printf("Done in %v", time.Since(start))
 }
 
 func populateHash(folders []string) {
 	hashes = map[string]string{}
-	var collisions int64
 	wg := sync.WaitGroup{}
 	for _, item := range folders {
 		files, err := ioutil.ReadDir(item)
@@ -228,11 +240,11 @@ func processHashes(dest string) {
 					err := copyFile(sourceFile, destinationFile)
 					if err != nil {
 						fmt.Printf("Error: copying file '%s': %v\n", sourceFile, err)
-						fmt.Println()
+						atomic.AddInt64(&copyErrors, 1)
 					} else if move {
 						if err := os.Remove(sourceFile); err != nil {
 							fmt.Printf("Error: removing source file '%s': %v", sourceFile, err)
-							fmt.Println()
+							atomic.AddInt64(&removeErrors, 1)
 						}
 					}
 				}
@@ -342,7 +354,6 @@ func worker(id int) {
 		select {
 		case job, ok := <-workerJobs:
 			if !ok {
-				fmt.Printf("exiting from worker: %d\n", id)
 				return
 			}
 			job()
