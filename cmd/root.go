@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,10 @@ import (
 )
 
 const timeFormat = "20060102T150405"
+
+type (
+	workerJob func()
+)
 
 var (
 	extensions = map[string]interface{}{
@@ -60,6 +65,8 @@ var (
 		Long:  `Deduplicate is an utility to remove duplicate images and rename the unique ones`,
 		Run:   run,
 	}
+
+	workerJobs chan workerJob
 )
 
 func init() {
@@ -99,14 +106,24 @@ func run(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// start workers
+	concurrency := runtime.NumCPU()
+	workerJobs = make(chan workerJob, concurrency)
+	for i := 0; i < concurrency; i++ {
+		go worker(i + 1)
+	}
+
 	fmt.Println("Source Folders:", folders)
 	fmt.Println("Destination:", dest)
 	fmt.Println("Rename:", rename)
 	fmt.Println("Move:", move)
+	fmt.Println("Concurrency Level:", concurrency)
 	fmt.Println()
 
 	populateHash(folders)
 	processHashes(dest)
+
+	close(workerJobs)
 }
 
 func populateHash(folders []string) {
@@ -122,9 +139,14 @@ func populateHash(folders []string) {
 			if f.IsDir() {
 				continue
 			}
-			wg.Add(1)
 			if _, ok := extensions[strings.ToLower(filepath.Ext(f.Name()))]; ok {
-				go processFileHash(&wg, item, f.Name(), &collisions)
+				wg.Add(1)
+				fPath := item
+				fName := f.Name()
+				job := func() {
+					processFileHash(&wg, fPath, fName, &collisions)
+				}
+				workerJobs <- job
 			}
 		}
 	}
@@ -297,4 +319,17 @@ func copyFileContents(src, dst string) (err error) {
 	}
 	err = out.Sync()
 	return
+}
+
+func worker(id int) {
+	for {
+		select {
+		case job, ok := <-workerJobs:
+			if !ok {
+				fmt.Printf("exiting from worker: %d\n", id)
+				return
+			}
+			job()
+		}
+	}
 }
