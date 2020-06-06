@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -44,7 +46,8 @@ var (
 		".m2v":  nil,
 		".mp2":  nil,
 	}
-	hashes map[string]string
+	hashesMutex = sync.Mutex{}
+	hashes      map[string]string
 
 	sources     []string
 	destination string
@@ -99,6 +102,7 @@ func run(cmd *cobra.Command, args []string) {
 	fmt.Println("Source Folders:", folders)
 	fmt.Println("Destination:", dest)
 	fmt.Println("Rename:", rename)
+	fmt.Println("Move:", move)
 	fmt.Println()
 
 	populateHash(folders)
@@ -107,7 +111,8 @@ func run(cmd *cobra.Command, args []string) {
 
 func populateHash(folders []string) {
 	hashes = map[string]string{}
-	collisions := 0
+	var collisions int64
+	wg := sync.WaitGroup{}
 	for _, item := range folders {
 		files, err := ioutil.ReadDir(item)
 		if err != nil {
@@ -117,28 +122,38 @@ func populateHash(folders []string) {
 			if f.IsDir() {
 				continue
 			}
+			wg.Add(1)
 			if _, ok := extensions[strings.ToLower(filepath.Ext(f.Name()))]; ok {
-				fPath := filepath.Join(item, f.Name())
-
-				data, err := ioutil.ReadFile(fPath)
-				if err != nil {
-					fmt.Println("Error:", fPath, err)
-				}
-				hash := sha512.Sum512(data)
-				strHash := fmt.Sprintf("%x", hash)
-
-				if current, ok := hashes[strHash]; ok {
-					collisions++
-					fmt.Printf("(%d). File '%s' duplicate with: '%s'. Ignoring it. \n", collisions, fPath, current)
-				} else {
-					hashes[strHash] = fPath
-				}
+				go processFileHash(&wg, item, f.Name(), &collisions)
 			}
 		}
 	}
+
+	wg.Wait()
 	fmt.Println()
 	fmt.Println("Total number of images:", len(hashes))
 	fmt.Println("Total number of duplicates:", collisions)
+}
+
+func processFileHash(wGroup *sync.WaitGroup, path string, fName string, collisionsCounter *int64) {
+	defer wGroup.Done()
+	fPath := filepath.Join(path, fName)
+
+	data, err := ioutil.ReadFile(fPath)
+	if err != nil {
+		fmt.Println("Error:", fPath, err)
+	}
+	hash := sha512.Sum512(data)
+	strHash := fmt.Sprintf("%x", hash)
+
+	hashesMutex.Lock()
+	defer hashesMutex.Unlock()
+	if current, ok := hashes[strHash]; ok {
+		currentCollisions := atomic.AddInt64(collisionsCounter, 1)
+		fmt.Printf("(%d). File '%s' duplicate with: '%s'. Ignoring it. \n", currentCollisions, fPath, current)
+	} else {
+		hashes[strHash] = fPath
+	}
 }
 
 func processHashes(dest string) {
