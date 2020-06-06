@@ -107,7 +107,7 @@ func run(cmd *cobra.Command, args []string) {
 	}
 
 	// start workers
-	concurrency := runtime.NumCPU()
+	concurrency := runtime.NumCPU() * 2
 	workerJobs = make(chan workerJob, concurrency)
 	for i := 0; i < concurrency; i++ {
 		go worker(i + 1)
@@ -172,7 +172,7 @@ func processFileHash(wGroup *sync.WaitGroup, path string, fName string, collisio
 	defer hashesMutex.Unlock()
 	if current, ok := hashes[strHash]; ok {
 		currentCollisions := atomic.AddInt64(collisionsCounter, 1)
-		fmt.Printf("(%d). File '%s' duplicate with: '%s'. Ignoring it. \n", currentCollisions, fPath, current)
+		fmt.Printf("(%d) File '%s' duplicate with: '%s'. Ignoring it. \n", currentCollisions, fPath, current)
 	} else {
 		hashes[strHash] = fPath
 	}
@@ -180,51 +180,60 @@ func processFileHash(wGroup *sync.WaitGroup, path string, fName string, collisio
 
 func processHashes(dest string) {
 	fmt.Println()
+	wg := sync.WaitGroup{}
+
 	for _, v := range hashes {
-		var destFileName string
+		wg.Add(1)
 
-		if rename {
-			fTime, err, noRename := getFileTime(v)
-			if err != nil {
-				fTime = time.Now()
-				fmt.Println(err)
-			}
-			if noRename {
-				destFileName = filepath.Base(v)
-			} else {
-				destFileName = fmt.Sprintf("%s %s", fTime.Format(timeFormat), filepath.Base(v))
-				destFileName = strings.ReplaceAll(destFileName, ":", "")
-			}
-		} else {
-			destFileName = filepath.Base(v)
-		}
+		sourceFile := v
+		workerJobs <- func() {
+			var destFileName string
 
-		nf := filepath.Clean(filepath.Join(dest, destFileName))
-
-		if v == nf {
-			fmt.Printf("Skipped: source '%s' is the same as '%s'\n", v, nf)
-		} else {
-			if simulate {
-				fmt.Println(v, "->", nf)
-			} else {
-				if !move {
-					fmt.Printf("Copying '%s' to '%s'\n", v, nf)
-				} else {
-					fmt.Printf("Moving '%s' to '%s'\n", v, nf)
-				}
-				err := copyFile(v, nf)
+			if rename {
+				fTime, err, noRename := getFileTime(sourceFile)
 				if err != nil {
-					fmt.Println("Error: copying file:", err)
-					fmt.Println()
-				} else if move {
-					if err := os.Remove(v); err != nil {
-						fmt.Println("Error: removing source file:", err)
+					fTime = time.Now()
+					fmt.Println(err)
+				}
+				if noRename {
+					destFileName = filepath.Base(sourceFile)
+				} else {
+					destFileName = fmt.Sprintf("%s %s", fTime.Format(timeFormat), filepath.Base(sourceFile))
+					destFileName = strings.ReplaceAll(destFileName, ":", "")
+				}
+			} else {
+				destFileName = filepath.Base(sourceFile)
+			}
+
+			destinationFile := filepath.Clean(filepath.Join(dest, destFileName))
+
+			if sourceFile == destinationFile {
+				fmt.Printf("Skipped: source '%s' is the same as '%s'\n", sourceFile, destinationFile)
+			} else {
+				if simulate {
+					fmt.Println(sourceFile, "->", destinationFile)
+				} else {
+					if !move {
+						fmt.Printf("Copying '%s' to '%s'\n", sourceFile, destinationFile)
+					} else {
+						fmt.Printf("Moving '%s' to '%s'\n", sourceFile, destinationFile)
+					}
+					err := copyFile(sourceFile, destinationFile)
+					if err != nil {
+						fmt.Printf("Error: copying file '%s': %v\n", sourceFile, err)
 						fmt.Println()
+					} else if move {
+						if err := os.Remove(sourceFile); err != nil {
+							fmt.Printf("Error: removing source file '%s': %v", sourceFile, err)
+							fmt.Println()
+						}
 					}
 				}
 			}
 		}
 	}
+
+	wg.Wait()
 }
 
 func getFileTime(filePath string) (fileTime time.Time, err error, timeInPath bool) {
