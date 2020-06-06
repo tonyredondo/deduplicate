@@ -137,7 +137,7 @@ func run(cmd *cobra.Command, args []string) {
 
 	fmt.Println()
 	fmt.Println()
-	fmt.Println("Total number of images:", len(hashes))
+	fmt.Println("Total number of images with no duplicates:", len(hashes))
 	fmt.Println("Total number of duplicates:", atomic.LoadInt64(&collisions))
 	fmt.Println("Total number of copy errors:", atomic.LoadInt64(&copyErrors))
 	if move {
