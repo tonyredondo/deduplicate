@@ -85,6 +85,7 @@ func Execute() {
 }
 
 func run(cmd *cobra.Command, args []string) {
+	start := time.Now()
 	var folders []string
 	var dest string
 	for _, item := range sources {
@@ -120,10 +121,16 @@ func run(cmd *cobra.Command, args []string) {
 	fmt.Println("Concurrency Level:", concurrency)
 	fmt.Println()
 
+	fmt.Println("Calculating hashes...")
 	populateHash(folders)
+	fmt.Println()
+	fmt.Println("Processing hashes...")
 	processHashes(dest)
 
 	close(workerJobs)
+
+	fmt.Println()
+	fmt.Printf("Done in %v.", time.Since(start))
 }
 
 func populateHash(folders []string) {
@@ -184,9 +191,9 @@ func processHashes(dest string) {
 
 	for _, v := range hashes {
 		wg.Add(1)
-
 		sourceFile := v
 		workerJobs <- func() {
+			defer wg.Done()
 			var destFileName string
 
 			if rename {
