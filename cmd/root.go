@@ -2,10 +2,10 @@ package cmd
 
 import (
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +18,8 @@ import (
 	"gopkg.in/djherbis/times.v1"
 )
 
+const timeFormat = "20060102T150405"
+
 var (
 	extensions = map[string]interface{}{
 		".jpg":  nil,
@@ -25,15 +27,29 @@ var (
 		".png":  nil,
 		".jpeg": nil,
 		".heic": nil,
+		".bmp":  nil,
+		".tif":  nil,
+		".jpe":  nil,
+		".raw":  nil,
 		".mp4":  nil,
 		".mov":  nil,
 		".m4v":  nil,
+		".3gp":  nil,
+		".avi":  nil,
+		".mkv":  nil,
+		".webm": nil,
+		".flv":  nil,
+		".wmv":  nil,
+		".mpg":  nil,
+		".m2v":  nil,
+		".mp2":  nil,
 	}
 	hashes map[string]string
 
 	sources     []string
 	destination string
 	rename      bool
+	move        bool
 	simulate    bool
 	rootCmd     = &cobra.Command{
 		Use:   "deduplicate",
@@ -46,7 +62,8 @@ var (
 func init() {
 	rootCmd.PersistentFlags().StringArrayVarP(&sources, "sources", "s", nil, "Sources folder to analyze")
 	rootCmd.PersistentFlags().StringVarP(&destination, "destination", "d", "", "Destination folder")
-	rootCmd.PersistentFlags().BoolVarP(&rename, "rename", "r", false, "Rename with chronological order")
+	rootCmd.PersistentFlags().BoolVarP(&rename, "rename", "r", false, "Rename with file datetime prefix")
+	rootCmd.PersistentFlags().BoolVarP(&move, "move", "m", false, "Move files instead of copying")
 	rootCmd.PersistentFlags().BoolVarP(&simulate, "simulate", "l", false, "Simulate process")
 }
 
@@ -94,7 +111,7 @@ func populateHash(folders []string) {
 	for _, item := range folders {
 		files, err := ioutil.ReadDir(item)
 		if err != nil {
-			log.Fatal(err)
+			fmt.Println("Error:", err)
 		}
 		for _, f := range files {
 			if f.IsDir() {
@@ -105,7 +122,7 @@ func populateHash(folders []string) {
 
 				data, err := ioutil.ReadFile(fPath)
 				if err != nil {
-					fmt.Println(fPath, err)
+					fmt.Println("Error:", fPath, err)
 				}
 				hash := sha512.Sum512(data)
 				strHash := fmt.Sprintf("%x", hash)
@@ -130,54 +147,79 @@ func processHashes(dest string) {
 		var destFileName string
 
 		if rename {
-			f, err := os.Open(v)
+			fTime, err, noRename := getFileTime(v)
 			if err != nil {
-				log.Println(err)
-				continue
+				fTime = time.Now()
+				fmt.Println(err)
 			}
-
-			var t *time.Time
-			x, err := exif.Decode(f)
-			if err == nil {
-				dt, err := x.DateTime()
-				if err == nil {
-					t = &dt
-				}
+			if noRename {
+				destFileName = filepath.Base(v)
+			} else {
+				destFileName = fmt.Sprintf("%s %s", fTime.Format(timeFormat), filepath.Base(v))
+				destFileName = strings.ReplaceAll(destFileName, ":", "")
 			}
-			if t == nil {
-				dt := time.Now()
-				s, err := times.Stat(v)
-				if err != nil {
-					st, err := f.Stat()
-					if err == nil {
-						dt = st.ModTime()
-					}
-				} else {
-					if s.HasBirthTime() {
-						dt = s.BirthTime()
-					} else {
-						dt = s.ModTime()
-					}
-				}
-				t = &dt
-			}
-			destFileName = fmt.Sprintf("%s %s", t.Format("20060102T150405"), filepath.Base(v))
-			destFileName = strings.ReplaceAll(destFileName, ":", "")
 		} else {
 			destFileName = filepath.Base(v)
 		}
 
 		nf := filepath.Clean(filepath.Join(dest, destFileName))
 
-		if simulate {
-			fmt.Println(v, "->", nf)
+		if v == nf {
+			fmt.Printf("Skipped: source '%s' is the same as '%s'\n", v, nf)
 		} else {
-			fmt.Printf("Copying '%s' to '%s'\n", v, nf)
-			err := copyFile(v, nf)
-			if err != nil {
-				fmt.Println(err)
-				fmt.Println()
+			if simulate {
+				fmt.Println(v, "->", nf)
+			} else {
+				if !move {
+					fmt.Printf("Copying '%s' to '%s'\n", v, nf)
+				} else {
+					fmt.Printf("Moving '%s' to '%s'\n", v, nf)
+				}
+				err := copyFile(v, nf)
+				if err != nil {
+					fmt.Println("Error: copying file:", err)
+					fmt.Println()
+				} else if move {
+					if err := os.Remove(v); err != nil {
+						fmt.Println("Error: removing source file:", err)
+						fmt.Println()
+					}
+				}
 			}
+		}
+	}
+}
+
+func getFileTime(filePath string) (fileTime time.Time, err error, timeInPath bool) {
+	fileName := filepath.Base(filePath)
+	if len(fileName) > len(timeFormat) {
+		if pTime, err := time.Parse(timeFormat, fileName[:len(timeFormat)]); err == nil {
+			return pTime, nil, true
+		}
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return time.Time{}, err, false
+	}
+	exifInfo, err := exif.Decode(file)
+	if err == nil {
+		if dt, err := exifInfo.DateTime(); err == nil {
+			return dt, nil, false
+		}
+	}
+	if stat, err := times.Stat(filePath); err == nil {
+		if stat.HasBirthTime() {
+			return stat.BirthTime(), nil, false
+		} else {
+			return stat.ModTime(), nil, false
+		}
+	} else {
+		if st, err := file.Stat(); err == nil {
+			return st.ModTime(), nil, false
+		} else {
+			return time.Time{},
+				errors.New(fmt.Sprintf("time can't be calculated for: %v", filePath)),
+				false
 		}
 	}
 }
