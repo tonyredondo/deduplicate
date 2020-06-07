@@ -169,8 +169,20 @@ func populateHash(folders []string) {
 			}
 		}
 	}
-
 	wg.Wait()
+
+	// Clear empty filePaths
+	hashesMutex.Lock()
+	defer hashesMutex.Unlock()
+	clearHashes := map[string]string{}
+	for k, v := range hashes {
+		if v == "" {
+			continue
+		}
+		clearHashes[k] = v
+	}
+	hashes = clearHashes
+
 	fmt.Println()
 	fmt.Println("Total number of images:", len(hashes))
 	fmt.Println("Total number of duplicates:", collisions)
@@ -180,21 +192,52 @@ func processFileHash(wGroup *sync.WaitGroup, path string, fName string, collisio
 	defer wGroup.Done()
 	fPath := filepath.Join(path, fName)
 
-	data, err := ioutil.ReadFile(fPath)
+	stat, err := os.Stat(fPath)
 	if err != nil {
 		fmt.Println("Error:", fPath, err)
+		return
 	}
-	hash := sha512.Sum512(data)
-	strHash := fmt.Sprintf("%x", hash)
 
 	hashesMutex.Lock()
 	defer hashesMutex.Unlock()
-	if current, ok := hashes[strHash]; ok {
-		currentCollisions := atomic.AddInt64(collisionsCounter, 1)
-		fmt.Printf("(%d) File '%s' duplicate with: '%s'. Ignoring it. \n", currentCollisions, fPath, current)
+
+	strSize := fmt.Sprint(stat.Size())
+	if current, ok := hashes[strSize]; ok {
+		if current != "" {
+			currentHash, err := getFileContentHash(current)
+			if err != nil {
+				fmt.Println("Error:", currentHash, err)
+			} else {
+				hashes[currentHash] = current
+				hashes[strSize] = ""
+			}
+		}
+
+		strHash, err := getFileContentHash(fPath)
+		if err != nil {
+			fmt.Println("Error:", fPath, err)
+			return
+		}
+
+		if cPath, okHash := hashes[strHash]; okHash {
+			currentCollisions := atomic.AddInt64(collisionsCounter, 1)
+			fmt.Printf("(%d) File '%s' duplicate with: '%s'. Ignoring it. \n", currentCollisions, fPath, cPath)
+		} else {
+			hashes[strHash] = fPath
+		}
+
 	} else {
-		hashes[strHash] = fPath
+		hashes[strSize] = fPath
 	}
+}
+
+func getFileContentHash(fPath string) (string, error) {
+	data, err := ioutil.ReadFile(fPath)
+	if err != nil {
+		return "", err
+	}
+	hash := sha512.Sum512(data)
+	return fmt.Sprintf("%x", hash), nil
 }
 
 func processHashes(dest string) {
