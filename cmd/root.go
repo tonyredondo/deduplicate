@@ -197,11 +197,10 @@ func processFileHash(wGroup *sync.WaitGroup, path string, fName string, collisio
 		fmt.Println("Error:", fPath, err)
 		return
 	}
+	strSize := fmt.Sprint(stat.Size())
 
 	hashesMutex.Lock()
 	defer hashesMutex.Unlock()
-
-	strSize := fmt.Sprint(stat.Size())
 	if current, ok := hashes[strSize]; ok {
 		if current != "" {
 			currentHash, err := getFileContentHash(current)
@@ -213,12 +212,14 @@ func processFileHash(wGroup *sync.WaitGroup, path string, fName string, collisio
 			}
 		}
 
+		hashesMutex.Unlock()
 		strHash, err := getFileContentHash(fPath)
 		if err != nil {
 			fmt.Println("Error:", fPath, err)
 			return
 		}
 
+		hashesMutex.Lock()
 		if cPath, okHash := hashes[strHash]; okHash {
 			currentCollisions := atomic.AddInt64(collisionsCounter, 1)
 			fmt.Printf("(%d) File '%s' duplicate with: '%s'. Ignoring it. \n", currentCollisions, fPath, cPath)
